@@ -271,8 +271,8 @@ function dbCard() {
   const show = v => JSON.stringify(v.length > 20 ? v.slice(0, 19) + '…' : v);
   const doc = last && ['employee_id', 'date', 'status', 'checkin_time', 'checkout_time', 'notes'].map(k => html`  <i>"${k}"</i>: <b>${show(last[k])}</b>`);
   const col = (name, n, idx, tip = '') => html`<li data-tip="${tip}"><code>${name}</code><span class="num">${n.toLocaleString('en-IN')} docs</span><small>index: ${idx}</small></li>`;
-  return html`<section class="card db" style="grid-area:db" aria-label="Document store">${wave()}
-    <div class="db-head"><h2>Document store</h2><span class="engine"><span class="dot" aria-hidden="true"></span>${S.engine || 'Connecting'}</span></div>
+  return html`<section class="card store" style="grid-area:db" aria-label="Document store">${wave()}
+    <div class="store-head"><h2>Document store</h2><span class="engine"><span class="dot" aria-hidden="true"></span>${S.engine || 'Connecting'}</span></div>
     <ul class="cols">${col('employees', S.emps.length, 'employee_id · unique')}${col('attendance', S.att.length, 'employee_id + date · unique', 'Marking someone twice on one day updates their document (upsert) instead of creating a duplicate')}</ul>
     ${last ? html`<p class="lbl">Latest write · ${ago < 1 ? 'just now' : ago < 60 ? `${ago} min ago` : fmt(last.date, { day: 'numeric', month: 'short' }) + ' ' + last.marked_at.slice(11, 16)}</p>
     <pre class="doc">{
@@ -452,12 +452,12 @@ function empPanel(id) {
 }
 function addEmpDrawer() {
   const next = 'EMP' + (Math.max(1000, ...S.emps.map(e => +e.employee_id.replace(/\D/g, '') || 0)) + 1);
-  const f = (name, label, attrs = '', full) => html`<div class="field${full ? ' full' : ''}"><label for="a-${name}">${label}</label><input class="input" id="a-${name}" name="${name}" ${new Raw(attrs)}><span class="err" id="e-${name}"></span></div>`;
+  const f = (name, label, attrs = '', full) => html`<div class="field${full ? ' full' : ''}"><label for="a-${name}">${label}${attrs.includes('required') ? '' : html` <span class="opt">optional</span>`}</label><input class="input" id="a-${name}" name="${name}" ${new Raw(attrs)}><span class="err" id="e-${name}"></span></div>`;
   openDrawer(html`<div class="dh"><div><h2 id="drawerTitle">Add employee</h2><span class="muted">They appear in the register from today</span></div><button class="icon-btn sm bare" data-act="close" aria-label="Close">${icon('x', 18)}</button></div>
     <form class="db" data-form="add" novalidate><div class="form-err" id="e-form" hidden></div><div class="form-grid">
-      ${f('employee_id', 'Employee ID', `value="${next}" required`)}${f('name', 'Full name', 'required autocomplete="off"')}
+      ${f('employee_id', 'Employee ID', `value="${next}" required`)}${f('name', 'Full name', 'required autocomplete="off" placeholder="e.g. Priya Sharma"')}
       <div class="field"><label for="a-department">Department</label><select class="input" id="a-department" name="department" required><option value="">Choose…</option>${depts().map(d => html`<option>${d}</option>`)}</select><span class="err" id="e-department"></span></div>
-      ${f('designation', 'Designation', 'required')}${f('email', 'Email', 'type="email"')}${f('phone', 'Phone', 'type="tel"')}${f('city', 'City', '', true)}</div>
+      ${f('designation', 'Designation', 'required placeholder="e.g. Frontend Developer"')}${f('email', 'Email', 'type="email" placeholder="name@company.in"')}${f('phone', 'Phone', 'type="tel" placeholder="+91 98765 43210"')}${f('city', 'City', 'placeholder="e.g. Bengaluru"', true)}</div>
       <div class="df"><button type="button" class="btn" data-act="close">Cancel</button><button class="btn primary">${icon('plus', 18)} Add employee</button></div></form>`);
 }
 async function submitAdd(form) {
