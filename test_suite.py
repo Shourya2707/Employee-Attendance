@@ -1,176 +1,112 @@
-"""
-Automated Feature Test Suite for Employee Attendance Management System
-"""
+"""Tests. Run: python -m unittest test_suite -v  (uses temp files, never touches attendance_db.json)"""
+import json
+import tempfile
+import threading
 import unittest
-import os
+import urllib.error
+import urllib.request
 from datetime import date
+from http.server import ThreadingHTTPServer
 from pathlib import Path
 
-from validators import (
-    validate_employee_id,
-    validate_name,
-    validate_department,
-    validate_designation,
-    validate_date,
-    validate_status,
-    validate_time,
-    validate_checkin_checkout,
-    VALID_STATUSES
-)
-from database import LocalClient, LocalCollection, DuplicateKeyError
+import server
+from database import DuplicateKeyError, local_collections
+from validators import (VALID_STATUSES, validate_checkin_checkout, validate_date, validate_department,
+                        validate_employee_id, validate_name, validate_status, validate_time)
+
 
 class TestValidators(unittest.TestCase):
-    def test_employee_id_validation(self):
-        # Valid cases
-        valid, val = validate_employee_id("EMP101")
-        self.assertTrue(valid)
-        self.assertEqual(val, "EMP101")
+    def test_employee_id(self):
+        self.assertEqual(validate_employee_id(" emp-002 "), (True, "EMP-002"))
+        for bad in ("", "A", "EMP 123", None):
+            self.assertFalse(validate_employee_id(bad)[0], bad)
 
-        valid, val = validate_employee_id("emp-002")
-        self.assertTrue(valid)
-        self.assertEqual(val, "EMP-002")
+    def test_name(self):
+        self.assertEqual(validate_name("aarav sharma"), (True, "Aarav Sharma"))
+        for bad in ("", "A", "John123"):
+            self.assertFalse(validate_name(bad)[0], bad)
 
-        # Invalid cases
-        valid, _ = validate_employee_id("")
-        self.assertFalse(valid)
+    def test_department_keeps_case(self):
+        self.assertEqual(validate_department(" IT Support "), (True, "IT Support"))
+        self.assertFalse(validate_department("")[0])
 
-        valid, _ = validate_employee_id("A") # too short
-        self.assertFalse(valid)
+    def test_date(self):
+        self.assertEqual(validate_date("2026-10-28"), (True, "2026-10-28"))
+        self.assertEqual(validate_date(""), (True, date.today().isoformat()))
+        self.assertFalse(validate_date("28-10-2026")[0])
 
-        valid, _ = validate_employee_id("EMP 123") # spaces not allowed
-        self.assertFalse(valid)
-
-    def test_name_validation(self):
-        valid, val = validate_name("Aarav Sharma")
-        self.assertTrue(valid)
-        self.assertEqual(val, "Aarav Sharma")
-
-        valid, _ = validate_name("")
-        self.assertFalse(valid)
-
-        valid, _ = validate_name("A")
-        self.assertFalse(valid)
-
-        valid, _ = validate_name("John123")
-        self.assertFalse(valid)
-
-    def test_department_validation(self):
-        valid, val = validate_department("engineering")
-        self.assertTrue(valid)
-        self.assertEqual(val, "Engineering")
-
-        valid, _ = validate_department("")
-        self.assertFalse(valid)
-
-    def test_designation_validation(self):
-        valid, val = validate_designation("software engineer")
-        self.assertTrue(valid)
-        self.assertEqual(val, "Software Engineer")
-
-    def test_date_validation(self):
-        valid, val = validate_date("2026-10-28")
-        self.assertTrue(valid)
-        self.assertEqual(val, "2026-10-28")
-
-        # Empty defaults to today
-        valid, val = validate_date("")
-        self.assertTrue(valid)
-        self.assertEqual(val, date.today().strftime("%Y-%m-%d"))
-
-        # Invalid format
-        valid, _ = validate_date("28-10-2026")
-        self.assertFalse(valid)
-
-    def test_status_validation(self):
+    def test_status(self):
         for status in VALID_STATUSES:
-            valid, val = validate_status(status.lower())
-            self.assertTrue(valid)
-            self.assertEqual(val, status)
+            self.assertEqual(validate_status(status.upper()), (True, status))
+        self.assertEqual(validate_status(""), (True, "Present"))
+        self.assertFalse(validate_status("Sleeping")[0])
 
-        valid, _ = validate_status("UnknownStatus")
-        self.assertFalse(valid)
+    def test_times(self):
+        self.assertEqual(validate_time("9:30 AM"), (True, "09:30"))
+        self.assertEqual(validate_time(""), (True, ""))
+        self.assertFalse(validate_time("25:00")[0])
+        self.assertTrue(validate_checkin_checkout("09:00", "18:00")[0])
+        self.assertFalse(validate_checkin_checkout("18:00", "09:00")[0])
 
-    def test_time_and_checkout_validation(self):
-        valid, val = validate_time("09:30")
-        self.assertTrue(valid)
-        self.assertEqual(val, "09:30")
 
-        valid, _ = validate_time("25:00")
-        self.assertFalse(valid)
-
-        # Checkout after checkin
-        valid, _ = validate_checkin_checkout("09:00", "18:00")
-        self.assertTrue(valid)
-
-        # Checkout before checkin
-        valid, err = validate_checkin_checkout("18:00", "09:00")
-        self.assertFalse(valid)
-        self.assertIn("must be after", err)
-
-class TestDatabaseOperations(unittest.TestCase):
+class TempDB(unittest.TestCase):
     def setUp(self):
-        self.test_file = Path("test_db.json")
-        if self.test_file.exists():
-            self.test_file.unlink()
-        self.client = LocalClient(self.test_file)
-        self.emp_col = LocalCollection("employees", self.test_file)
-        self.att_col = LocalCollection("attendance", self.test_file)
-        self.emp_col.create_index("employee_id", unique=True)
-        self.att_col.create_index([("employee_id", 1), ("date", 1)], unique=True)
+        self.tmp = tempfile.TemporaryDirectory()
+        self.emp, self.att = local_collections(Path(self.tmp.name) / "db.json")
 
     def tearDown(self):
-        if self.test_file.exists():
-            self.test_file.unlink()
+        self.tmp.cleanup()
 
-    def test_employee_crud_and_uniqueness(self):
-        # Insert employee
-        res = self.emp_col.insert_one({"employee_id": "EMP101", "name": "Test User", "department": "IT"})
-        self.assertIsNotNone(res.inserted_id)
 
-        # Duplicate ID must raise DuplicateKeyError
+class TestLocalCollection(TempDB):
+    def test_crud(self):
+        self.emp.insert_one({"employee_id": "EMP1", "name": "Test"})
+        self.assertEqual(self.emp.find_one({"employee_id": "EMP1"})["name"], "Test")
+        self.emp.update_one({"employee_id": "EMP1"}, {"$set": {"name": "New"}})
+        self.assertEqual(self.emp.find_one()["name"], "New")
+        self.emp.update_one({"employee_id": "EMP2"}, {"$set": {"name": "Upserted"}}, upsert=True)
+        self.assertEqual([e["employee_id"] for e in self.emp.find(sort=[("employee_id", -1)])], ["EMP2", "EMP1"])
+        self.assertEqual(self.emp.delete_one({"employee_id": "EMP1"}).deleted_count, 1)
+        self.assertEqual(self.emp.delete_one({"employee_id": "EMP1"}).deleted_count, 0)
+
+    def test_unique_constraints(self):
+        self.emp.insert_one({"employee_id": "EMP1"})
         with self.assertRaises(DuplicateKeyError):
-            self.emp_col.insert_one({"employee_id": "EMP101", "name": "Second User", "department": "HR"})
-
-        # Read employee
-        doc = self.emp_col.find_one({"employee_id": "EMP101"})
-        self.assertIsNotNone(doc)
-        self.assertEqual(doc["name"], "Test User")
-
-        # Update employee
-        self.emp_col.update_one({"employee_id": "EMP101"}, {"$set": {"department": "Engineering"}})
-        updated = self.emp_col.find_one({"employee_id": "EMP101"})
-        self.assertEqual(updated["department"], "Engineering")
-
-        # Delete employee
-        del_res = self.emp_col.delete_one({"employee_id": "EMP101"})
-        self.assertEqual(del_res.deleted_count, 1)
-        self.assertIsNone(self.emp_col.find_one({"employee_id": "EMP101"}))
-
-    def test_attendance_crud_and_uniqueness(self):
-        today = "2026-10-28"
-        self.att_col.insert_one({
-            "employee_id": "EMP101",
-            "date": today,
-            "status": "Present",
-            "checkin_time": "09:00"
-        })
-
-        # Duplicate attendance for same employee on same date must raise DuplicateKeyError
+            self.emp.insert_one({"employee_id": "EMP1"})
+        self.att.insert_one({"employee_id": "EMP1", "date": "2026-10-28"})
+        self.att.insert_one({"employee_id": "EMP1", "date": "2026-10-27"})
         with self.assertRaises(DuplicateKeyError):
-            self.att_col.insert_one({
-                "employee_id": "EMP101",
-                "date": today,
-                "status": "Late"
-            })
+            self.att.insert_one({"employee_id": "EMP1", "date": "2026-10-28"})
+        self.assertEqual(len(self.att.find()), 2)
 
-        # Different date or different employee is allowed
-        self.att_col.insert_one({
-            "employee_id": "EMP102",
-            "date": today,
-            "status": "Present"
-        })
-        self.assertEqual(self.att_col.count_documents(), 2)
+
+class TestHTTP(TempDB):
+    def setUp(self):
+        super().setUp()
+        self.emp.insert_one({"employee_id": "EMP1", "name": "Test", "department": "HR", "status": "Active"})
+        server.emp_col, server.att_col = self.emp, self.att
+        self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
+        threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
+        self.addCleanup(self.httpd.server_close)
+        self.addCleanup(self.httpd.shutdown)
+
+    def post(self, body):
+        url = f"http://127.0.0.1:{self.httpd.server_port}/api/attendance"
+        req = urllib.request.Request(url, json.dumps(body).encode(), {"Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req) as resp:
+                return resp.status, json.load(resp)
+        except urllib.error.HTTPError as e:
+            return e.code, json.load(e)
+
+    def test_post_attendance(self):
+        code, body = self.post({"employee_id": "EMP1", "status": "Sleeping"})
+        self.assertEqual(code, 400)
+        self.assertIn("Invalid status", body["error"])
+        code, body = self.post({"employee_id": "emp1", "date": "2026-10-27", "status": "late", "checkin_time": "09:45"})
+        self.assertEqual((code, body["status"], body["checkin_time"]), (200, "Late", "09:45"))
+        self.assertEqual(len(self.att.find()), 1)
+
 
 if __name__ == "__main__":
     unittest.main()
-

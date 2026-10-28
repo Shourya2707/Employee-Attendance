@@ -1,73 +1,71 @@
-# Employee Attendance Management System
+# Rollbase: Employee Attendance on a NoSQL Document Store
 
-A robust, full-featured Employee Attendance Management System with both **Interactive Terminal CLI** and **Modern Live Web Dashboard**.
+Rollbase (roll call + database) records employees and their daily attendance as JSON documents. It has two front ends that share one database:
 
----
+- a web dashboard (`server.py` + `static/`)
+- an interactive command-line menu (`main.py`)
 
-## 🚀 Quick Start (Running Live)
+Data is stored in MongoDB when one is reachable at `MONGODB_URI` (read from `.env`,
+default `mongodb://localhost:27017/`). Otherwise it falls back to the local file
+`attendance_db.json`, so the project runs with plain Python 3.8+ and no installs.
+To use MongoDB, `pip install pymongo` and start a MongoDB server.
 
-### Option 1: Live Interactive Terminal CLI
-Run in PowerShell:
-```powershell
-& "$env:LOCALAPPDATA\Programs\Python\Python313\python.exe" main.py
+How the NoSQL design works:
+- Two collections, `employees` and `attendance`. Each check-in is one document.
+- A unique index on `employee_id`, and a compound unique index on `(employee_id, date)`. Re-marking someone on the same day is an upsert, so it never creates a duplicate.
+- The dashboard's *Document store* card shows the live engine, document counts, indexes, and the latest document written.
+
+## Running
+
 ```
-*(Or simply double-click `run_cli.bat`)*
-
-**To run an automated instant demo in terminal:**
-```powershell
-& "$env:LOCALAPPDATA\Programs\Python\Python313\python.exe" main.py --demo
-```
-
----
-
-### Option 2: Live Web Dashboard & REST API
-Run in PowerShell:
-```powershell
-& "$env:LOCALAPPDATA\Programs\Python\Python313\python.exe" server.py
-```
-*(Or simply double-click `run_web.bat`)*
-
-Open your browser at: **[http://127.0.0.1:5000](http://127.0.0.1:5000)**
-
----
-
-## 🛠 Project Architecture
-
-| File | Description |
-| :--- | :--- |
-| **`main.py`** | Interactive CLI application providing Employee Registration, Attendance Tracking, Filtering, and Reports. |
-| **`server.py`** | Lightweight, zero-dependency Web Server serving the interactive frontend dashboard and REST APIs (`/api/employees`, `/api/attendance`). |
-| **`database.py`** | Database layer supporting live **MongoDB** (`mongodb://localhost:27017/`), with an automatic, seamless **Local Database** fallback (`attendance_db.json`) ensuring zero setup friction. |
-| **`validators.py`** | Input validation engine checking Employee IDs, Name formats, Departments, Designations, Dates, Statuses, and Check-In/Check-Out logic. |
-| **`test_suite.py`** | Complete `unittest` suite covering all validator and database CRUD operations. |
-| **`run_cli.bat`** | 1-Click launcher for Terminal CLI. |
-| **`run_web.bat`** | 1-Click launcher for Web Dashboard (automatically opens browser). |
-
----
-
-## 🧪 Running Automated Tests
-
-Run the test suite via PowerShell:
-```powershell
-& "$env:LOCALAPPDATA\Programs\Python\Python313\python.exe" -m unittest test_suite.py -v
+python server.py          # web dashboard on http://127.0.0.1:5000
+python server.py 8080     # ...or on another port
+python main.py            # command-line menu
+python seed_data.py       # rebuild attendance_db.json with fresh demo data
 ```
 
----
+On Windows, `run_web.bat` and `run_cli.bat` do the same (the web one also opens the browser).
+If the database is empty, the server fills it with demo data on start-up.
 
-## 📋 Complete Feature Test Guide
+## Project layout
 
-### 1. Employee Management Tests
-- [x] **Add Employee**: Validates employee ID format (`EMPxxx`), name, department, designation, and optional contact info.
-- [x] **Duplicate ID Prevention**: Prevents registering two employees with the same ID (raises unique constraint error).
-- [x] **Employee Directory**: Displays all active staff in formatted table with counts.
+| File | Purpose |
+| --- | --- |
+| `server.py` | HTTP server (standard library `http.server`): serves `static/` and the JSON API |
+| `static/` | Web frontend: `index.html`, `style.css`, `app.js` |
+| `main.py` | Command-line menu: add/list employees, mark and view attendance |
+| `database.py` | Connects to MongoDB, or provides `LocalCollection`, a JSON-file stand-in with the same methods |
+| `validators.py` | Input checks; each returns `(True, cleaned_value)` or `(False, error_message)` |
+| `seed_data.py` | Generates 35 employees and six weeks of weekday attendance ending today |
+| `test_suite.py` | Unit tests |
 
-### 2. Attendance Tracking Tests
-- [x] **Mark Attendance**: Records date (defaults to today), status (`Present`, `Late`, `Half-Day`, `Absent`, `On Leave`), and timestamps.
-- [x] **Same-Day Duplicate Prevention**: Checks if attendance for the employee on the given date exists, prompting whether to update or retain.
-- [x] **Time Validation**: Ensures check-out time is chronologically after check-in time.
+## API
 
-### 3. Reports & Analytics Tests
-- [x] **Attendance Log**: Formatted view with date, ID, name, status, and in/out times.
-- [x] **Multi-Criteria Filtering**: Filter by specific employee, single date, or department.
-- [x] **Summary Statistics**: Aggregates total records and counts per status category.
+All bodies are JSON. Errors are returned as `{"error": "message"}`.
 
+| Method | Path | Body | Response |
+| --- | --- | --- | --- |
+| GET | `/api/employees` | | list of employees, sorted by `employee_id` |
+| GET | `/api/attendance` | | list of records, newest date first |
+| GET | `/api/live-status` | | `{version, server_time, today, engine}`; `engine` is `MongoDB` or `JSON file`; `version` changes whenever data changes |
+| GET | `/api/export-csv?month=YYYY-MM` | | CSV download; `month` is optional |
+| POST | `/api/employees` | `employee_id, name, department, designation`, optional `email, phone, city` | 201 + employee, 400 if invalid or duplicate |
+| POST | `/api/attendance` | `employee_id, status`, optional `date` (default today), `checkin_time, checkout_time, notes` | 200 + record (creates or replaces that day's record), 400 if invalid |
+| POST | `/api/attendance/mark-all-present` | optional `date` | `{marked, date}`: marks every active employee without a record as Present 09:00-18:00 |
+| DELETE | `/api/attendance` | `employee_id, date` | `{deleted: 0 or 1}` |
+
+Statuses: `Present`, `Late`, `Half-Day`, `On Leave`, `Absent`. Dates are `YYYY-MM-DD`, times `HH:MM`.
+For Present/Late/Half-Day without a check-in time, the existing check-in (or the current time) is used;
+On Leave and Absent records have empty times. Check-out must be after check-in.
+
+Employee: `employee_id, name, department, designation, email, phone, city, created_at, status`.
+Attendance record: `employee_id, employee_name, department, date, status, checkin_time, checkout_time, notes, marked_at`.
+
+## Tests
+
+```
+python -m unittest test_suite -v
+```
+
+Covers the validators, `LocalCollection` (CRUD and unique keys) and one HTTP request against a
+server on a temporary port. Tests use a temporary file and never touch `attendance_db.json`.
