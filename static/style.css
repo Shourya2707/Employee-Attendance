@@ -1,4 +1,4 @@
-/* Muster — design tokens
+/* Rollbase — design tokens
    Primary: forest green family. Late = amber, Absent = muted red, Leave = slate.
    Radius scale: 8 (controls) / 14 (inner tiles) / 22 (cards). Spacing on an 8px grid. */
 :root {
@@ -82,8 +82,8 @@ a { color: inherit; }
   background: radial-gradient(120% 90% at 100% 0%, #2a7a52 0%, transparent 60%), var(--g-900);
 }
 .side-card .wave { position: absolute; inset: 0; opacity: .22; pointer-events: none; }
-.side-card h3 { font-size: 15px; font-weight: 600; position: relative; }
-.side-card p { font-size: 12px; color: #c3dccd; margin: 4px 0 16px; position: relative; }
+.side-card h3 { font-size: 15px; font-weight: 600; position: relative; display: flex; align-items: center; gap: 8px; }
+.side-card p { font-size: 12px; color: #c3dccd; margin-top: 6px; position: relative; line-height: 1.5; }
 .side-card .btn { width: 100%; position: relative; }
 .rail .label, .rail .nav-h span, .rail .side-card, .rail .nav-a .badge { display: none; }
 .rail .nav-h { text-align: center; padding: 16px 0 8px; }
@@ -188,7 +188,7 @@ textarea.input { height: auto; padding: 10px 12px; resize: vertical; }
 
 .grid-ov {
   display: grid; gap: 16px; grid-template-columns: repeat(4, minmax(0, 1fr));
-  grid-template-areas: "k1 k2 k3 k4" "week week reg dept" "live live gauge clock";
+  grid-template-areas: "k1 k2 k3 k4" "week week reg dept" "live live gauge db";
 }
 .kpi { position: relative; display: flex; flex-direction: column; gap: 8px; min-height: 168px; }
 .kpi h2 { font-size: 15px; font-weight: 600; }
@@ -277,18 +277,24 @@ textarea.input { height: auto; padding: 10px 12px; resize: vertical; }
 .legend span { display: inline-flex; align-items: center; gap: 6px; }
 .sw { width: 12px; height: 12px; border-radius: 4px; flex: none; }
 
-/* shift clock */
-.clock { position: relative; overflow: hidden; color: #fff; border: 0; background: radial-gradient(120% 100% at 100% 100%, #1f6a45 0%, transparent 60%), var(--g-950); display: flex; flex-direction: column; }
-.clock .wave { position: absolute; inset: 0; opacity: .28; pointer-events: none; }
-.clock > :not(.wave) { position: relative; }
-.clock h2 { font-size: 17px; font-weight: 600; }
-.clock .time { font-size: 44px; font-weight: 600; letter-spacing: -.03em; margin: 12px 0 4px; font-variant-numeric: tabular-nums; }
-.clock .meta { font-size: 12px; color: #b9d5c4; }
-.clock .prog { height: 8px; border-radius: 4px; background: rgb(255 255 255 / .14); margin: 16px 0 8px; overflow: hidden; }
-.clock .prog i { display: block; height: 100%; background: #9fe0b9; border-radius: 4px; }
-.clock .ends { display: flex; justify-content: space-between; font-size: 11px; color: #b9d5c4; font-variant-numeric: tabular-nums; }
-.clock .in { margin-top: auto; padding-top: 16px; display: flex; align-items: baseline; gap: 8px; font-size: 13px; color: #d7eadf; }
-.clock .in b { font-size: 22px; color: #fff; }
+/* document store (NoSQL) card */
+.db { position: relative; overflow: hidden; color: #fff; border: 0; background: radial-gradient(120% 100% at 100% 100%, #1f6a45 0%, transparent 60%), var(--g-950); display: flex; flex-direction: column; gap: 12px; }
+.db .wave { position: absolute; inset: 0; opacity: .28; pointer-events: none; }
+.db > :not(.wave) { position: relative; }
+.db-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.db h2 { font-size: 17px; font-weight: 600; }
+.engine { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; padding: 4px 10px; border-radius: 99px; background: rgb(255 255 255 / .12); }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: #9fe0b9; box-shadow: 0 0 0 3px rgb(159 224 185 / .25); flex: none; }
+.db .cols { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
+.db .cols li { display: grid; grid-template-columns: 1fr auto; row-gap: 2px; padding: 8px 12px; border-radius: 12px; background: rgb(255 255 255 / .07); }
+.db code, .db .doc { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+.db code { font-size: 13px; color: #fff; }
+.db .cols .num { font-size: 13px; font-weight: 600; }
+.db .cols small { grid-column: 1 / -1; font-size: 11px; color: #b9d5c4; }
+.db .lbl { font-size: 11px; color: #b9d5c4; text-transform: uppercase; letter-spacing: .06em; }
+.db .doc { font-size: 11.5px; line-height: 1.55; padding: 10px 12px; border-radius: 12px; background: rgb(0 0 0 / .28); color: #d7eadf; white-space: pre; overflow-x: auto; margin-top: -4px; }
+.db .doc i { font-style: normal; color: #9fe0b9; }
+.db .doc b { font-weight: 400; color: #fff; }
 
 /* ---------- mark attendance ---------- */
 .progress { height: 8px; border-radius: 4px; background: var(--line-2); overflow: hidden; }
@@ -434,7 +440,7 @@ dialog::backdrop { background: rgb(10 22 16 / .42); }
 
 /* ---------- responsive ---------- */
 @media (max-width: 1279px) {
-  .grid-ov { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-areas: "k1 k2" "k3 k4" "week week" "reg dept" "live live" "gauge clock"; }
+  .grid-ov { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-areas: "k1 k2" "k3 k4" "week week" "reg dept" "live live" "gauge db"; }
   .role-text { display: none; }
 }
 @media (max-width: 899px) {
@@ -456,7 +462,7 @@ dialog::backdrop { background: rgb(10 22 16 / .42); }
   .topbar { margin: 8px 8px 0; gap: 8px; padding: 8px; } main { margin-left: 8px; padding: 16px 8px 40px 0; }
   .search-trigger { flex: 1; } .search-trigger kbd, .today-label { display: none; }
   .role-chip { padding-left: 8px; } .sync { font-size: 0; gap: 0; }
-  .grid-ov { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; grid-template-areas: "k1 k2" "k3 k4" "week week" "reg reg" "dept dept" "live live" "gauge gauge" "clock clock"; }
+  .grid-ov { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; grid-template-areas: "k1 k2" "k3 k4" "week week" "reg reg" "dept dept" "live live" "gauge gauge" "db db"; }
   .card { padding: 16px; border-radius: 18px; }
   .kpi { min-height: 140px; } .kpi .big { font-size: 38px; } .kpi h2 { font-size: 13px; padding-right: 32px; }
   .kpi .go { width: 32px; height: 32px; top: 12px; right: 12px; }
@@ -470,4 +476,3 @@ dialog::backdrop { background: rgb(10 22 16 / .42); }
   .heat { grid-template-columns: 80px repeat(5, minmax(0, 1fr)); } .heat .rl { white-space: normal; font-size: 11px; line-height: 1.2; }
   .heat .c { font-size: 11px; }
 }
-.clock .stack .avatar { border-color: var(--g-950); }

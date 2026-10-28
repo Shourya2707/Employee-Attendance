@@ -1,5 +1,5 @@
 'use strict';
-/* Muster — attendance register UI. Vanilla JS, no build step.
+/* Rollbase — attendance register on a NoSQL document store. Vanilla JS, no build step.
    All stats are computed here from /api/employees and /api/attendance. */
 
 // ---------- template helper (escapes every interpolated value unless it is already html``) ----------
@@ -51,7 +51,7 @@ const dur = m => `${Math.floor(m / 60)}h ${String(Math.round(m % 60)).padStart(2
 const pct = x => x == null ? '–' : `${Math.round(x * 100)}%`;
 const plural = (n, w) => `${n.toLocaleString()} ${w}${n === 1 ? '' : 's'}`;
 const workdays = (from, to) => { const out = []; for (let d = from; d <= to; d = addDays(d, 1)) if (isWork(d)) out.push(d); return out; };
-const SHIFT = [540, 1080], LATE_AFTER = 570; // 09:00–18:00, late after 09:30
+const SHIFT_START = 540, LATE_AFTER = 570; // shift starts 09:00, late after 09:30
 
 // ---------- state + indexes ----------
 const STATUSES = ['Present', 'Late', 'Half-Day', 'On Leave', 'Absent'];
@@ -86,7 +86,7 @@ function tally(rs) {
   t.onTime = t.n ? t.Present / t.n : null;
   return t;
 }
-const lateBy = rs => { const m = rs.filter(r => r.status === 'Late' && r.checkin_time).map(r => mins(r.checkin_time) - SHIFT[0]); return m.length ? m.reduce((a, b) => a + b) / m.length : null; };
+const lateBy = rs => { const m = rs.filter(r => r.status === 'Late' && r.checkin_time).map(r => mins(r.checkin_time) - SHIFT_START); return m.length ? m.reduce((a, b) => a + b) / m.length : null; };
 const prevDay = d => [...byDate.keys()].filter(x => x < d && isWork(x)).sort().pop();
 const avClass = id => 'av-' + [...id].reduce((a, c) => a + c.charCodeAt(0), 0) % 6;
 const initials = n => n.split(/\s+/).map(w => w[0]).slice(0, 2).join('').toUpperCase();
@@ -109,6 +109,7 @@ async function poll() {
   try {
     const s = await api('/api/live-status');
     if (s.today) S.today = s.today;
+    if (s.engine) S.engine = s.engine;
     if (s.server_time) S.offset = new Date(s.server_time.replace(' ', 'T')) - Date.now();
     if (s.version !== S.version) { setSync('syncing'); await load(); S.version = s.version; }
     setSync('ok');
@@ -135,7 +136,7 @@ function render() {
   if (!S.loaded) { $('#main').innerHTML = skeleton(); return; }
   const a = document.activeElement, fid = a && a.id && $('#main').contains(a) ? a.id : null, sel = a && a.selectionStart;
   $('#main').innerHTML = v.render(r.q);
-  document.title = `${v.title} · Muster`;
+  document.title = `${v.title} · Rollbase`;
   const f = fid && document.getElementById(fid);
   if (f) { f.focus({ preventScroll: true }); if (sel != null && f.setSelectionRange) try { f.setSelectionRange(sel, sel); } catch { } }
   if (!S.counted && r.view === 'overview') countUp();
@@ -146,16 +147,14 @@ const skeleton = () => html`<div class="page-head"><div class="sk" style="width:
 const NAV = [['overview', 'Overview', 'grid'], ['mark', 'Mark Attendance', 'mark'], ['records', 'Records', 'list'], ['employees', 'Employees', 'users'], ['reports', 'Reports', 'chart']];
 function renderChrome(view) {
   const unmarked = S.loaded && isWork(S.today) ? staff().filter(e => !byKey.has(key(e.employee_id, S.today))).length : 0;
-  const month = S.today.slice(0, 7), mName = fmt(S.today, { month: 'long' });
   $('#nav').innerHTML = html`<div class="nav-h"><span>Menu</span></div>
     ${NAV.map(([v, label, ic]) => html`<a class="nav-a" href="#/${v}" ${v === view ? new Raw('aria-current="page"') : ''} data-tip="${label}" data-tip-rail>${icon(ic)}<span class="label">${label}</span>${v === 'mark' && unmarked ? html`<span class="badge" aria-label="${unmarked} not marked">${unmarked}</span>` : ''}</a>`)}
     <div class="nav-h"><span>General</span></div>
     <a class="nav-a" href="/api/export-csv" download data-tip="Export all records as CSV" data-tip-rail>${icon('download')}<span class="label">Export CSV</span></a>
     <button class="nav-a" data-act="keys" data-tip="Keyboard shortcuts  ?" data-tip-rail>${icon('keyboard')}<span class="label">Keyboard shortcuts</span></button>`;
-  const mRecs = S.att.filter(r => r.date.startsWith(month)).length;
-  $('#sideCard').innerHTML = html`${wave()}<h3>${mName} report</h3>
-    <p>${S.loaded ? `${plural(workdays(month + '-01', S.today).length, 'working day')} so far · ${plural(mRecs, 'record')}` : 'Loading…'}</p>
-    <a class="btn light sm" href="/api/export-csv?month=${month}" download>${icon('download', 16)} Download CSV</a>`;
+  const docs = S.emps.length + S.att.length;
+  $('#sideCard').innerHTML = html`${wave()}<h3><span class="dot" aria-hidden="true"></span>${S.engine || 'Document store'}</h3>
+    <p>${S.loaded ? `2 collections · ${docs.toLocaleString('en-IN')} documents` : 'Connecting…'}${S.engine === 'JSON file' ? html`<br>MongoDB offline, using attendance_db.json` : ''}</p>`;
   const mobile = matchMedia('(max-width: 899px)').matches, root = document.documentElement;
   $('#hamburger').setAttribute('aria-expanded', mobile ? root.classList.contains('drawer-open') : !root.classList.contains('rail'));
 }
@@ -182,7 +181,7 @@ function overview() {
     ${kpi('k3', 'On leave / absent', tt['On Leave'] + tt.Absent, `${tt['On Leave']} on leave · ${tt.Absent} absent`, link('records', { from: t, to: t, status: 'On Leave,Absent' }))}
     ${kpi('k4', 'Not yet marked', work ? unmarked.length : 0, work ? (unmarked.length ? html`<a class="link" href="#/mark">Open today's register</a>` : 'Register complete') : 'Weekend', '#/mark')}
     ${weekCard()}${registerCard(unmarked, recs, head, work)}${deptCard()}${liveCard(recs)}${gaugeCard()}
-    <section class="card clock" style="grid-area:clock" id="clock" aria-label="Shift clock">${clockInner()}</section>
+    ${dbCard()}
   </div>`;
 }
 
@@ -238,7 +237,7 @@ function liveCard(recs) {
     <a class="btn sm" href="${link('records', { from: S.today, to: S.today, sort: '-in' })}">View all</a></div>
     ${ins.length ? html`<ul class="rows">${ins.slice(0, 5).map(r => {
     const e = byId.get(r.employee_id) || {};
-    const why = r.status === 'Late' ? (r.notes ? `Late: ${r.notes}` : `Late by ${mins(r.checkin_time) - SHIFT[0]} min`) : e.designation;
+    const why = r.status === 'Late' ? (r.notes ? `Late: ${r.notes}` : `Late by ${mins(r.checkin_time) - SHIFT_START} min`) : e.designation;
     return html`<li>${avatar(r.employee_id, r.employee_name)}<div class="who"><b>${r.employee_name}</b><small class="${r.status === 'Late' ? 'note' : ''}">${why}</small></div><span class="time">${r.checkin_time}</span>${pill(r.status)}</li>`;
   })}</ul>` : html`<div class="empty"><b>No check-ins yet</b><span>Nobody has a check-in time recorded for today.</span><a class="btn primary sm" href="#/mark">Open register</a></div>`}</section>`;
 }
@@ -257,17 +256,20 @@ function gaugeCard() {
     ${pt.n ? html`<p class="muted" style="text-align:center;margin-top:16px;font-size:12px">${fmt(pm, { month: 'long' })}: ${pct(pt.onTime)} on time over ${plural(pt.n, 'person-day')}</p>` : ''}</section>`;
 }
 
-function clockInner() {
-  const now = new Date(Date.now() + S.offset), m = now.getHours() * 60 + now.getMinutes() + now.getSeconds() / 60;
-  const recs = byDate.get(S.today) || [], ins = recs.filter(r => r.checkin_time && ATTENDED.has(r.status));
-  const stillIn = ins.filter(r => !r.checkout_time), still = stillIn.length;
-  const p = Math.min(1, Math.max(0, (m - SHIFT[0]) / (SHIFT[1] - SHIFT[0])));
-  const meta = !isWork(S.today) ? 'No shift today' : m < SHIFT[0] ? `Shift starts in ${dur(SHIFT[0] - m)}` : m < SHIFT[1] ? `${dur(m - SHIFT[0])} elapsed · ${dur(SHIFT[1] - m)} left` : `Shift ended ${dur(m - SHIFT[1])} ago`;
-  return html`${wave()}<h2>Shift clock</h2><div class="time">${now.toLocaleTimeString('en-GB')}</div><div class="meta">${meta}</div>
-    <div class="prog" role="progressbar" aria-label="Shift progress" aria-valuenow="${Math.round(p * 100)}" aria-valuemin="0" aria-valuemax="100"><i style="width:${p * 100}%"></i></div>
-    <div class="ends"><span>09:00</span><span>18:00</span></div>
-    <div class="in"><b>${still}</b> still checked in · ${ins.length - still} checked out</div>
-    ${still ? html`<div class="stack" style="margin:12px 0 0">${stillIn.slice(0, 6).map(r => html`<span data-tip="${r.employee_name} · in since ${r.checkin_time}">${avatar(r.employee_id, r.employee_name)}</span>`)}${still > 6 ? html`<span class="avatar av-0">+${still - 6}</span>` : ''}</div>` : ''}`;
+// The NoSQL side of the app: what is stored, how it is indexed, and the last document written.
+function dbCard() {
+  const last = S.att.reduce((a, r) => (!a || r.marked_at > a.marked_at ? r : a), null);
+  const ago = last && Math.round((Date.now() + S.offset - new Date(last.marked_at.replace(' ', 'T'))) / 60000);
+  const show = v => JSON.stringify(v.length > 20 ? v.slice(0, 19) + '…' : v);
+  const doc = last && ['employee_id', 'date', 'status', 'checkin_time', 'checkout_time', 'notes'].map(k => html`  <i>"${k}"</i>: <b>${show(last[k])}</b>`);
+  const col = (name, n, idx, tip = '') => html`<li data-tip="${tip}"><code>${name}</code><span class="num">${n.toLocaleString('en-IN')} docs</span><small>index: ${idx}</small></li>`;
+  return html`<section class="card db" style="grid-area:db" aria-label="Document store">${wave()}
+    <div class="db-head"><h2>Document store</h2><span class="engine"><span class="dot" aria-hidden="true"></span>${S.engine || 'Connecting'}</span></div>
+    <ul class="cols">${col('employees', S.emps.length, 'employee_id · unique')}${col('attendance', S.att.length, 'employee_id + date · unique', 'Marking someone twice on one day updates their document (upsert) instead of creating a duplicate')}</ul>
+    ${last ? html`<p class="lbl">Latest write · ${ago < 1 ? 'just now' : ago < 60 ? `${ago} min ago` : fmt(last.date, { day: 'numeric', month: 'short' }) + ' ' + last.marked_at.slice(11, 16)}</p>
+    <pre class="doc">{
+${new Raw(doc.join(',\n'))}
+}</pre>` : ''}</section>`;
 }
 
 function countUp() {
@@ -572,12 +574,12 @@ function showTip(el) {
 
 // ---------- chrome actions ----------
 const store = (k, v) => { try { localStorage.setItem(k, v); } catch { } };
-function toggleTheme() { const r = document.documentElement, dark = r.dataset.theme !== 'dark'; r.dataset.theme = dark ? 'dark' : 'light'; store('muster.theme', r.dataset.theme); themeIcon(); }
+function toggleTheme() { const r = document.documentElement, dark = r.dataset.theme !== 'dark'; r.dataset.theme = dark ? 'dark' : 'light'; store('rollbase.theme', r.dataset.theme); themeIcon(); }
 const themeIcon = () => { const dark = document.documentElement.dataset.theme === 'dark'; $('#themeBtn').innerHTML = icon(dark ? 'sun' : 'moon'); $('#themeBtn').setAttribute('aria-label', dark ? 'Switch to light theme' : 'Switch to dark theme'); };
 function setMobileNav(open) { document.documentElement.classList.toggle('drawer-open', open); $('#scrim').hidden = !open; renderChrome(route().view); if (open) $('#nav a')?.focus(); }
 function toggleSidebar() {
   if (innerWidth < 900) return setMobileNav(!document.documentElement.classList.contains('drawer-open'));
-  store('muster.rail', document.documentElement.classList.toggle('rail') ? '1' : '0'); renderChrome(route().view);
+  store('rollbase.rail', document.documentElement.classList.toggle('rail') ? '1' : '0'); renderChrome(route().view);
 }
 
 // ---------- event wiring (delegated) ----------
@@ -648,5 +650,4 @@ $('#hamburger').innerHTML = icon('menu'); $('#hamburger').onclick = toggleSideba
 $('#scrim').onclick = () => setMobileNav(false);
 $('#searchBtn').innerHTML = html`${icon('search', 18)}<span>Search employees or jump to…</span><kbd>Ctrl K</kbd>`; $('#searchBtn').onclick = openPalette;
 $('#themeBtn').onclick = toggleTheme; themeIcon();
-setInterval(() => { const c = $('#clock'); if (c) c.innerHTML = clockInner(); }, 1000);
 render(); poll(); setInterval(poll, 5000);

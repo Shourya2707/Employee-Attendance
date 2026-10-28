@@ -11,7 +11,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import seed_data
-from database import connect
+from database import LocalCollection, connect
 from validators import (validate_checkin_checkout, validate_date, validate_department, validate_designation,
                         validate_employee_id, validate_name, validate_status, validate_time)
 
@@ -140,7 +140,8 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/live-status":
             # ponytail: hashes all data per poll; fine for thousands of rows, use a change counter beyond that
             version = hashlib.md5(json.dumps([employees(), attendance()]).encode()).hexdigest()[:12]
-            self.reply(200, {"version": version, "server_time": now(), "today": now("%Y-%m-%d")})
+            engine = "JSON file" if isinstance(emp_col, LocalCollection) else "MongoDB"
+            self.reply(200, {"version": version, "server_time": now(), "today": now("%Y-%m-%d"), "engine": engine})
         elif path == "/api/export-csv":
             month = parse_qs(url.query).get("month", [""])[0]
             out = io.StringIO()

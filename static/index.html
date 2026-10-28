@@ -3,22 +3,22 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Muster · Attendance</title>
-<meta name="description" content="Daily attendance register for HR: who is in, who is late, and who still needs marking.">
+<title>Rollbase · Attendance</title>
+<meta name="description" content="Employee attendance register on a NoSQL document store: who is in, who is late, and who still needs marking.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/static/style.css">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%231B5A3B'/%3E%3Cpath d='M9 11h14M9 16h14M9 21h8' stroke='%23fff' stroke-width='2.4' stroke-linecap='round'/%3E%3C/svg%3E">
-<script>try{var t=localStorage.getItem('muster.theme');if(t)document.documentElement.dataset.theme=t;if(localStorage.getItem('muster.rail')==='1')document.documentElement.classList.add('rail')}catch(e){}</script>
+<link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20viewBox%3D%220%200%2032%2032%22%3E%3Crect%20width%3D%2232%22%20height%3D%2232%22%20rx%3D%229%22%20fill%3D%22%231B5A3B%22/%3E%3Cg%20fill%3D%22none%22%20stroke%3D%22%23fff%22%20stroke-width%3D%222%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cellipse%20cx%3D%2214.5%22%20cy%3D%229.5%22%20rx%3D%226.5%22%20ry%3D%222.5%22/%3E%3Cpath%20d%3D%22M8%209.5v12c0%201.4%202.9%202.5%206.5%202.5M21%209.5v5M8%2015.5c0%201.4%202.9%202.5%206.5%202.5%22/%3E%3Cpath%20d%3D%22M18%2021.5l2.5%202.5%205-5.5%22/%3E%3C/g%3E%3C/svg%3E">
+<script>try{var t=localStorage.getItem('rollbase.theme');if(t)document.documentElement.dataset.theme=t;if(localStorage.getItem('rollbase.rail')==='1')document.documentElement.classList.add('rail')}catch(e){}</script>
 </head>
 <body>
 <a class="skip" href="#main">Skip to content</a>
 <div class="app">
   <aside class="sidebar" id="sidebar" aria-label="Primary">
     <div class="brand">
-      <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 32 32"><rect width="32" height="32" rx="9" fill="currentColor"/><path d="M9 11h14M9 16h14M9 21h8" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/></svg></span>
-      <span class="brand-name label">Muster</span>
+      <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 32 32"><rect width="32" height="32" rx="9" fill="currentColor"/><g fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="14.5" cy="9.5" rx="6.5" ry="2.5"/><path d="M8 9.5v12c0 1.4 2.9 2.5 6.5 2.5M21 9.5v5M8 15.5c0 1.4 2.9 2.5 6.5 2.5"/><path d="M18 21.5l2.5 2.5 5-5.5"/></g></svg></span>
+      <span class="brand-name label">Rollbase</span>
     </div>
     <nav id="nav"></nav>
     <div class="side-card" id="sideCard"></div>
@@ -32,7 +32,7 @@
         <span class="today-label" id="todayLabel"></span>
         <span class="sync" id="sync" role="status" aria-live="polite"></span>
         <button class="icon-btn" id="themeBtn" aria-label="Toggle dark theme"></button>
-        <span class="role-chip"><span class="avatar av-0" aria-hidden="true">HR</span><span class="role-text"><b>HR Admin</b><small>Signed-in role</small></span></span>
+        <span class="role-chip"><span class="avatar av-0" aria-hidden="true">HR</span><span class="role-text"><b>HR Admin</b></span></span>
       </div>
     </header>
     <main id="main" tabindex="-1"></main>

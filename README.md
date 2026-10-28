@@ -1,6 +1,6 @@
-# Employee Attendance Management System
+# Rollbase: Employee Attendance on a NoSQL Document Store
 
-Records employees and their daily attendance. It has two front ends that share one database:
+Rollbase (roll call + database) records employees and their daily attendance as JSON documents. It has two front ends that share one database:
 
 - a web dashboard (`server.py` + `static/`)
 - an interactive command-line menu (`main.py`)
@@ -9,6 +9,11 @@ Data is stored in MongoDB when one is reachable at `MONGODB_URI` (read from `.en
 default `mongodb://localhost:27017/`). Otherwise it falls back to the local file
 `attendance_db.json`, so the project runs with plain Python 3.8+ and no installs.
 To use MongoDB, `pip install pymongo` and start a MongoDB server.
+
+How the NoSQL design works:
+- Two collections, `employees` and `attendance`. Each check-in is one document.
+- A unique index on `employee_id`, and a compound unique index on `(employee_id, date)`. Re-marking someone on the same day is an upsert, so it never creates a duplicate.
+- The dashboard's *Document store* card shows the live engine, document counts, indexes, and the latest document written.
 
 ## Running
 
@@ -42,7 +47,7 @@ All bodies are JSON. Errors are returned as `{"error": "message"}`.
 | --- | --- | --- | --- |
 | GET | `/api/employees` | | list of employees, sorted by `employee_id` |
 | GET | `/api/attendance` | | list of records, newest date first |
-| GET | `/api/live-status` | | `{version, server_time, today}`; `version` changes whenever data changes |
+| GET | `/api/live-status` | | `{version, server_time, today, engine}`; `engine` is `MongoDB` or `JSON file`; `version` changes whenever data changes |
 | GET | `/api/export-csv?month=YYYY-MM` | | CSV download; `month` is optional |
 | POST | `/api/employees` | `employee_id, name, department, designation`, optional `email, phone, city` | 201 + employee, 400 if invalid or duplicate |
 | POST | `/api/attendance` | `employee_id, status`, optional `date` (default today), `checkin_time, checkout_time, notes` | 200 + record (creates or replaces that day's record), 400 if invalid |
