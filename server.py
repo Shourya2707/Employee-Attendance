@@ -1,297 +1,190 @@
-"""
-Employee Attendance Management System - Live Interactive Application Server
-High-End Dashboard matching modern SaaS UI with:
-1. Real-time background database synchronization
-2. Interactive Dashboard with KPI cards, capsule analytics charts, radial progress gauge, and live time tracker
-3. "Lazy & Efficient" Quick Data Entry Page (1-click mark, speed punch-in, batch actions)
-4. Comprehensive Tabular Data Page (all data in row form with filters, search, inline editing, and CSV export)
-"""
-
-import sys
-import os
+"""Web server: serves the dashboard in static/ and a small JSON API. Run: python server.py [port]"""
+import csv
+import hashlib
+import io
 import json
-import urllib.parse
 import mimetypes
-from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
-from datetime import datetime, date
+import sys
+from datetime import datetime
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
-from database import connect_and_setup, DuplicateKeyError
-from validators import (
-    validate_employee_id,
-    validate_name,
-    validate_department,
-    validate_designation,
-    validate_date,
-    validate_status,
-    validate_time,
-    VALID_STATUSES,
-    VALID_DEPARTMENTS
-)
-
-_, _, emp_col, att_col = connect_and_setup()
-
-def ensure_rich_seed_data():
-    """Ensure a rich set of Indian corporate employees and attendance records exist."""
-    if emp_col.count_documents() < 10 or att_col.count_documents() < 100:
-        import seed_data
-        seed_data.generate_indian_dataset(525, 35)
-
-ensure_rich_seed_data()
+import seed_data
+from database import connect
+from validators import (validate_checkin_checkout, validate_date, validate_department, validate_designation,
+                        validate_employee_id, validate_name, validate_status, validate_time)
 
 STATIC_DIR = (Path(__file__).parent / "static").resolve()
+ON_SITE = ("Present", "Late", "Half-Day")
+NO_ID = {"_id": 0}  # MongoDB's ObjectId is not JSON-serialisable
+emp_col = att_col = None  # set by run(), or by the tests
 
-class RequestHandler(BaseHTTPRequestHandler):
-    def log_message(self, format, *args):
-        # Keep terminal log clean
-        sys.stderr.write(f"[{datetime.now().strftime('%H:%M:%S')}] {args[0]} {args[1]}\n")
+
+def now(fmt="%Y-%m-%d %H:%M:%S"):
+    return datetime.now().strftime(fmt)
+
+
+def check(result):
+    """Unwrap a validator result, raising ValueError (-> HTTP 400) on failure."""
+    ok, value = result
+    if not ok:
+        raise ValueError(value)
+    return value
+
+
+def employees():
+    return list(emp_col.find({}, NO_ID, sort=[("employee_id", 1)]))
+
+
+def attendance():
+    return list(att_col.find({}, NO_ID, sort=[("date", -1), ("employee_id", 1)]))
+
+
+def add_employee(data):
+    emp_id = check(validate_employee_id(data["employee_id"]))
+    doc = {
+        "employee_id": emp_id,
+        "name": check(validate_name(data["name"])),
+        "department": check(validate_department(data["department"])),
+        "designation": check(validate_designation(data["designation"])),
+        "email": data["email"] or f"{emp_id.lower()}@company.com",
+        "phone": data["phone"] or "N/A",
+        "city": data["city"],
+        "created_at": now(),
+        "status": "Active",
+    }
+    if emp_col.find_one({"employee_id": emp_id}):
+        raise ValueError(f"Employee ID '{emp_id}' is already registered.")
+    emp_col.insert_one(dict(doc))  # copy: pymongo adds _id to the dict it inserts
+    return doc
+
+
+def mark_attendance(data):
+    emp_id = data["employee_id"].upper()
+    emp = emp_col.find_one({"employee_id": emp_id})
+    if not emp:
+        raise ValueError(f"Employee '{emp_id}' not found.")
+    day = check(validate_date(data["date"]))
+    status = check(validate_status(data["status"]))
+    checkin = check(validate_time(data["checkin_time"]))
+    checkout = check(validate_time(data["checkout_time"]))
+    key = {"employee_id": emp_id, "date": day}
+    if status in ON_SITE:
+        if not checkin:
+            checkin = (att_col.find_one(key, NO_ID) or {}).get("checkin_time") or now("%H:%M")
+        check(validate_checkin_checkout(checkin, checkout))
+    else:
+        checkin = checkout = ""
+    record = {**key, "employee_name": emp["name"], "department": emp["department"], "status": status,
+              "checkin_time": checkin, "checkout_time": checkout, "notes": data["notes"], "marked_at": now()}
+    att_col.update_one(key, {"$set": record}, upsert=True)
+    return record
+
+
+def mark_all_present(data):
+    day = check(validate_date(data["date"]))
+    done = {r["employee_id"] for r in att_col.find({"date": day}, NO_ID)}
+    new = [{"employee_id": e["employee_id"], "employee_name": e["name"], "department": e["department"],
+            "date": day, "status": "Present", "checkin_time": "09:00", "checkout_time": "18:00",
+            "notes": "Marked present in bulk", "marked_at": now()}
+           for e in emp_col.find({"status": "Active"}, NO_ID) if e["employee_id"] not in done]
+    if new:
+        att_col.insert_many(new)
+    return {"marked": len(new), "date": day}
+
+
+def delete_attendance(data):
+    if not data["employee_id"] or not data["date"]:
+        raise ValueError("employee_id and date are required.")
+    result = att_col.delete_one({"employee_id": data["employee_id"].upper(), "date": data["date"]})
+    return {"deleted": result.deleted_count}
+
+
+WRITE_ROUTES = {
+    ("POST", "/api/employees"): (201, add_employee),
+    ("POST", "/api/attendance"): (200, mark_attendance),
+    ("POST", "/api/attendance/mark-all-present"): (200, mark_all_present),
+    ("DELETE", "/api/attendance"): (200, delete_attendance),
+}
+
+
+class Handler(BaseHTTPRequestHandler):
+    def reply(self, code, body, content_type="application/json", filename=None):
+        if content_type == "application/json":
+            body = json.dumps(body)
+        body = body.encode() if isinstance(body, str) else body
+        self.send_response(code)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        if filename:
+            self.send_header("Content-Disposition", f"attachment; filename={filename}")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def not_found(self):
+        self.reply(404, {"error": "Not found"})
 
     def do_GET(self):
-        parsed = urllib.parse.urlparse(self.path)
-        path = parsed.path
-
+        url = urlparse(self.path)
+        path = url.path
         if path == "/" or path.startswith("/static/"):
-            name = "index.html" if path == "/" else path[len("/static/"):]
-            file = (STATIC_DIR / name).resolve()
-            if file.parent != STATIC_DIR or not file.is_file():
-                self.send_response(404)
-                self.end_headers()
-                return
-            self.send_response(200)
-            self.send_header("Content-Type", mimetypes.guess_type(file.name)[0] or "application/octet-stream")
-            self.end_headers()
-            self.wfile.write(file.read_bytes())
-
-        elif path == "/api/live-status":
-            # Real-time state identifier based on database file modification time and record counts
-            db_file = Path("attendance_db.json")
-            mtime = db_file.stat().st_mtime if db_file.exists() else 0
-            emp_count = emp_col.count_documents()
-            att_count = att_col.count_documents()
-            version_str = f"{mtime}_{emp_count}_{att_count}"
-            self.respond_json(200, {
-                "version": version_str,
-                "employees_count": emp_count,
-                "attendance_count": att_count,
-                "server_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            })
-
+            file = (STATIC_DIR / (path[len("/static/"):] if path != "/" else "index.html")).resolve()
+            if file.parent != STATIC_DIR or not file.is_file():  # blocks ../ traversal
+                return self.not_found()
+            self.reply(200, file.read_bytes(), mimetypes.guess_type(file.name)[0] or "application/octet-stream")
         elif path == "/api/employees":
-            employees = emp_col.find(sort=[("employee_id", 1)])
-            self.respond_json(200, employees)
-
+            self.reply(200, employees())
         elif path == "/api/attendance":
-            records = att_col.find(sort=[("date", -1), ("employee_id", 1)])
-            self.respond_json(200, records)
-
+            self.reply(200, attendance())
+        elif path == "/api/live-status":
+            # ponytail: hashes all data per poll; fine for thousands of rows, use a change counter beyond that
+            version = hashlib.md5(json.dumps([employees(), attendance()]).encode()).hexdigest()[:12]
+            self.reply(200, {"version": version, "server_time": now(), "today": now("%Y-%m-%d")})
         elif path == "/api/export-csv":
-            records = att_col.find(sort=[("date", -1), ("employee_id", 1)])
-            csv_lines = ["Date,Employee ID,Employee Name,Department,Status,Check-In,Check-Out,Notes"]
-            for r in records:
-                csv_lines.append(f'"{r.get("date","")}","{r.get("employee_id","")}","{r.get("employee_name","")}","{r.get("department","")}","{r.get("status","")}","{r.get("checkin_time","")}","{r.get("checkout_time","")}","{r.get("notes","")}"')
-            csv_content = "\n".join(csv_lines)
-
-            self.send_response(200)
-            self.send_header("Content-Type", "text/csv")
-            self.send_header("Content-Disposition", "attachment; filename=attendance_records.csv")
-            self.end_headers()
-            self.wfile.write(csv_content.encode("utf-8"))
-
+            month = parse_qs(url.query).get("month", [""])[0]
+            out = io.StringIO()
+            writer = csv.writer(out)
+            writer.writerow(["Date", "Employee ID", "Employee Name", "Department", "Status", "Check-In", "Check-Out", "Notes"])
+            for r in attendance():
+                if r["date"].startswith(month):
+                    writer.writerow([r["date"], r["employee_id"], r["employee_name"], r["department"], r["status"],
+                                     r["checkin_time"], r["checkout_time"], r["notes"]])
+            self.reply(200, out.getvalue(), "text/csv", f"attendance_{month or 'all'}.csv")
         else:
-            self.send_response(404)
-            self.end_headers()
+            self.not_found()
 
-    def do_POST(self):
-        parsed = urllib.parse.urlparse(self.path)
-        path = parsed.path
-        length = int(self.headers.get('Content-Length', 0))
-        body = self.rfile.read(length).decode('utf-8') if length > 0 else "{}"
+    def write(self):
+        route = WRITE_ROUTES.get((self.command, urlparse(self.path).path))
+        if not route:
+            return self.not_found()
+        code, action = route
         try:
-            data = json.loads(body) if body else {}
-        except Exception:
-            self.respond_json(400, {"error": "Invalid JSON format"})
-            return
+            data = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
+            if not isinstance(data, dict):
+                raise ValueError("Expected a JSON object.")
+            # every field arrives as a stripped string, missing ones as ""
+            fields = ("employee_id", "name", "department", "designation", "email", "phone", "city",
+                      "date", "status", "checkin_time", "checkout_time", "notes")
+            self.reply(code, action({k: str(data.get(k) or "").strip() for k in fields}))
+        except ValueError as e:  # includes invalid JSON
+            self.reply(400, {"error": str(e)})
 
-        if path == "/api/employees":
-            v_id, emp_id = validate_employee_id(data.get("employee_id", ""))
-            v_name, name = validate_name(data.get("name", ""))
-            v_dept, dept = validate_department(data.get("department", ""))
-            v_desig, desig = validate_designation(data.get("designation", ""))
-            if not v_id:
-                self.respond_json(400, {"error": emp_id})
-                return
-            if not v_name:
-                self.respond_json(400, {"error": name})
-                return
-            if not v_dept:
-                self.respond_json(400, {"error": dept})
-                return
-            if not v_desig:
-                self.respond_json(400, {"error": desig})
-                return
+    do_POST = do_DELETE = write
 
-            if emp_col.find_one({"employee_id": emp_id}):
-                self.respond_json(400, {"error": f"Employee ID '{emp_id}' is already registered."})
-                return
 
-            new_emp = {
-                "employee_id": emp_id,
-                "name": name,
-                "department": dept,
-                "designation": desig,
-                "email": data.get("email") or f"{emp_id.lower()}@company.com",
-                "phone": data.get("phone") or "N/A",
-                "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "status": "Active"
-            }
-            emp_col.insert_one(new_emp)
-            self.respond_json(201, new_emp)
-
-        elif path == "/api/attendance":
-            emp_id = data.get("employee_id", "").strip().upper()
-            emp = emp_col.find_one({"employee_id": emp_id})
-            if not emp:
-                self.respond_json(400, {"error": f"Employee '{emp_id}' not found."})
-                return
-
-            v_date, date_str = validate_date(data.get("date", ""))
-            v_status, status = validate_status(data.get("status", "Present"))
-
-            record = {
-                "employee_id": emp_id,
-                "employee_name": emp.get("name", "Unknown"),
-                "department": emp.get("department", "Unknown"),
-                "date": date_str,
-                "status": status,
-                "checkin_time": data.get("checkin_time", "") or datetime.now().strftime("%H:%M"),
-                "checkout_time": data.get("checkout_time", ""),
-                "notes": data.get("notes", ""),
-                "marked_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            }
-
-            existing = att_col.find_one({"employee_id": emp_id, "date": date_str})
-            if existing:
-                att_col.update_one({"employee_id": emp_id, "date": date_str}, {"$set": record})
-            else:
-                att_col.insert_one(record)
-            self.respond_json(200, record)
-
-        elif path == "/api/attendance/quick-mark":
-            # 1-Click fast mark endpoint for the Lazy Data Entry page
-            emp_id = data.get("employee_id", "").strip().upper()
-            status = data.get("status", "Present")
-            date_str = data.get("date") or date.today().strftime("%Y-%m-%d")
-
-            emp = emp_col.find_one({"employee_id": emp_id})
-            if not emp:
-                self.respond_json(400, {"error": f"Employee '{emp_id}' not found."})
-                return
-
-            existing = att_col.find_one({"employee_id": emp_id, "date": date_str})
-            now_time = datetime.now().strftime("%H:%M")
-
-            checkin = existing.get("checkin_time") if existing else (now_time if status in ["Present", "Late", "Half-Day"] else "")
-            checkout = existing.get("checkout_time", "") if existing else ""
-
-            record = {
-                "employee_id": emp_id,
-                "employee_name": emp.get("name", "Unknown"),
-                "department": emp.get("department", "Unknown"),
-                "date": date_str,
-                "status": status,
-                "checkin_time": checkin,
-                "checkout_time": checkout,
-                "notes": f"Quick-marked as {status}",
-                "marked_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            }
-
-            if existing:
-                att_col.update_one({"employee_id": emp_id, "date": date_str}, {"$set": record})
-            else:
-                att_col.insert_one(record)
-
-            self.respond_json(200, record)
-
-        elif path == "/api/attendance/mark-all-present":
-            # Ultra-lazy: 1-click mark all unmarked employees for today as Present
-            today_str = date.today().strftime("%Y-%m-%d")
-            all_emps = emp_col.find()
-            marked_count = 0
-
-            for emp in all_emps:
-                emp_id = emp["employee_id"]
-                existing = att_col.find_one({"employee_id": emp_id, "date": today_str})
-                if not existing:
-                    att_col.insert_one({
-                        "employee_id": emp_id,
-                        "employee_name": emp.get("name", "Unknown"),
-                        "department": emp.get("department", "Unknown"),
-                        "date": today_str,
-                        "status": "Present",
-                        "checkin_time": "09:00",
-                        "checkout_time": "18:00",
-                        "notes": "1-Click Auto Marked Present",
-                        "marked_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    })
-                    marked_count += 1
-
-            self.respond_json(200, {"message": f"Successfully marked {marked_count} remaining employees as Present for {today_str}!"})
-
-        elif path == "/api/seed-demo":
-            ensure_rich_seed_data()
-            self.respond_json(200, {"message": "Demo data seeded successfully!"})
-
-        else:
-            self.send_response(404)
-            self.end_headers()
-
-    def do_DELETE(self):
-        parsed = urllib.parse.urlparse(self.path)
-        path = parsed.path
-        length = int(self.headers.get('Content-Length', 0))
-        body = self.rfile.read(length).decode('utf-8') if length > 0 else "{}"
-        try:
-            data = json.loads(body)
-        except Exception:
-            self.respond_json(400, {"error": "Invalid JSON"})
-            return
-
-        if path == "/api/attendance":
-            emp_id = data.get("employee_id")
-            date_str = data.get("date")
-            if not emp_id or not date_str:
-                self.respond_json(400, {"error": "Missing employee_id or date"})
-                return
-
-            res = att_col.delete_one({"employee_id": emp_id, "date": date_str})
-            self.respond_json(200, {"deleted": res.deleted_count})
-        else:
-            self.send_response(404)
-            self.end_headers()
-
-    def respond_json(self, status_code, obj):
-        self.send_response(status_code)
-        self.send_header("Content-Type", "application/json")
-        self.end_headers()
-        self.wfile.write(json.dumps(obj).encode("utf-8"))
-
-def run_server(port=5000):
-    server = ThreadingHTTPServer(('127.0.0.1', port), RequestHandler)
-    server.daemon_threads = True
-    print(f"\n==================================================================")
-    print(f"  DONEZO ATTENDANCE SYSTEM - LIVE INTERACTIVE SERVER")
-    print(f"  Live Dashboard URL: http://127.0.0.1:{port}")
-    print(f"  Real-time database auto-sync: ENABLED")
-    print(f"  Press Ctrl+C to stop the server.")
-    print(f"==================================================================\n")
+def run(port=5000):
+    global emp_col, att_col
+    emp_col, att_col = connect()
+    if emp_col.find_one() is None:
+        print("Empty database, adding demo data:", seed_data.seed(emp_col, att_col))
+    server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    print(f"Dashboard: http://127.0.0.1:{port}  (Ctrl+C to stop)")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
-        print("\nShutting down server...")
         server.server_close()
 
+
 if __name__ == "__main__":
-    port = 5000
-    if len(sys.argv) > 1 and sys.argv[1].isdigit():
-        port = int(sys.argv[1])
-    run_server(port)
+    run(int(sys.argv[1]) if len(sys.argv) > 1 else 5000)

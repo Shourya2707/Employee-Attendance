@@ -1,225 +1,111 @@
-"""
-Database module for Employee Attendance Management System
-Supports real MongoDB via pymongo with seamless local JSON/SQLite storage fallback.
-"""
-import os
+"""Storage: MongoDB if one is reachable, otherwise a local JSON file with the same small API."""
 import json
-from datetime import datetime
+import os
+import threading
 from pathlib import Path
+from types import SimpleNamespace
+
+HERE = Path(__file__).parent
+DB_FILE = HERE / "attendance_db.json"
+_lock = threading.Lock()  # one writer at a time; collections share one file
+
 
 class DuplicateKeyError(Exception):
-    """Raised when an operation would violate a unique index constraint."""
     pass
 
+
+def _matches(doc, query):
+    return all(doc.get(k) == v for k, v in (query or {}).items())
+
+
 class LocalCollection:
-    """A lightweight, MongoDB-compatible collection for local file-backed persistence."""
-    def __init__(self, name: str, storage_file: Path):
-        self.name = name
-        self.storage_file = storage_file
-        self.unique_keys = set()
-        self._last_mtime = 0
-        self._load()
+    """The subset of pymongo's Collection this app uses, stored under one key of a JSON file.
+    The file is re-read on every call, so the CLI and the web server see each other's changes."""
 
-    def _check_reload(self):
-        if self.storage_file.exists():
-            try:
-                mtime = self.storage_file.stat().st_mtime
-                if mtime > self._last_mtime:
-                    self._load()
-            except Exception:
-                pass
+    def __init__(self, name, path=DB_FILE, unique=()):
+        self.name, self.path, self.unique = name, Path(path), unique
 
-    def _load(self):
-        if self.storage_file.exists():
-            try:
-                self._last_mtime = self.storage_file.stat().st_mtime
-                with open(self.storage_file, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                    self.docs = data.get(self.name, [])
-            except Exception:
-                self.docs = []
-        else:
-            self.docs = []
+    def _read(self):
+        try:
+            return json.loads(self.path.read_text("utf-8"))
+        except FileNotFoundError:
+            return {}
 
-    def _save(self):
-        data = {}
-        if self.storage_file.exists():
-            try:
-                with open(self.storage_file, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-            except Exception:
-                data = {}
-        data[self.name] = self.docs
-        with open(self.storage_file, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, default=str)
-        if self.storage_file.exists():
-            self._last_mtime = self.storage_file.stat().st_mtime
+    def _docs(self):
+        return self._read().get(self.name, [])
 
-    def create_index(self, keys, unique=False):
-        if unique:
-            if isinstance(keys, str):
-                self.unique_keys.add(keys)
-            elif isinstance(keys, (list, tuple)):
-                key_names = tuple(k[0] if isinstance(k, (list, tuple)) else k for k in keys)
-                self.unique_keys.add(key_names)
+    def _save(self, docs):
+        data = self._read()
+        data[self.name] = docs
+        tmp = self.path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(data, indent=1), "utf-8")
+        os.replace(tmp, self.path)  # atomic: readers never see a half-written file
 
-    def _matches(self, doc, query):
-        if not query:
-            return True
-        for k, v in query.items():
-            if k == "$or":
-                if not any(self._matches(doc, q) for q in v):
-                    return False
-            elif isinstance(v, dict):
-                doc_val = doc.get(k)
-                for op, op_val in v.items():
-                    if op == "$gte" and not (doc_val is not None and doc_val >= op_val):
-                        return False
-                    elif op == "$lte" and not (doc_val is not None and doc_val <= op_val):
-                        return False
-                    elif op == "$gt" and not (doc_val is not None and doc_val > op_val):
-                        return False
-                    elif op == "$lt" and not (doc_val is not None and doc_val < op_val):
-                        return False
-                    elif op == "$in" and not (doc_val in op_val):
-                        return False
-            else:
-                if doc.get(k) != v:
-                    return False
-        return True
+    def find(self, query=None, projection=None, sort=()):
+        docs = [d for d in self._docs() if _matches(d, query)]
+        for field, direction in reversed(sort):
+            docs.sort(key=lambda d: d.get(field, ""), reverse=direction < 0)
+        return docs
+
+    def find_one(self, query=None, projection=None):
+        return next(iter(self.find(query)), None)
 
     def insert_one(self, doc):
-        self._check_reload()
-        doc_copy = dict(doc)
-        # Check unique constraints
-        for u_key in self.unique_keys:
-            if isinstance(u_key, tuple):
-                query = {k: doc_copy.get(k) for k in u_key}
-            else:
-                query = {u_key: doc_copy.get(u_key)}
-            if self.find_one(query):
-                raise DuplicateKeyError(f"E11000 duplicate key error collection: {self.name} index on {u_key}")
+        self.insert_many([doc])
 
-        if "_id" not in doc_copy:
-            doc_copy["_id"] = len(self.docs) + 1
-        self.docs.append(doc_copy)
-        self._save()
-        class Result:
-            inserted_id = doc_copy["_id"]
-        return Result()
+    def insert_many(self, new_docs):
+        with _lock:
+            docs = self._docs()
+            for doc in new_docs:
+                for keys in self.unique:
+                    if any(all(d.get(k) == doc.get(k) for k in keys) for d in docs):
+                        raise DuplicateKeyError(f"Duplicate {'/'.join(keys)} in {self.name}")
+                docs.append(dict(doc))
+            self._save(docs)
 
-    def find_one(self, query=None):
-        self._check_reload()
-        for doc in self.docs:
-            if self._matches(doc, query):
-                return dict(doc)
-        return None
-
-    def find(self, query=None, sort=None):
-        self._check_reload()
-        results = [dict(doc) for doc in self.docs if self._matches(doc, query)]
-        if sort:
-            for field, direction in reversed(sort):
-                results.sort(key=lambda d: d.get(field, ""), reverse=(direction < 0))
-        return results
-
-    def update_one(self, query, update):
-        self._check_reload()
-        for doc in self.docs:
-            if self._matches(doc, query):
-                if "$set" in update:
-                    doc.update(update["$set"])
-                else:
-                    doc.update(update)
-                self._save()
-                class Result:
-                    modified_count = 1
-                return Result()
-        class Result:
-            modified_count = 0
-        return Result()
+    def update_one(self, query, update, upsert=False):
+        with _lock:
+            docs = self._docs()
+            match = next((d for d in docs if _matches(d, query)), None)
+            if match:
+                match.update(update["$set"])
+            elif upsert:
+                docs.append({**query, **update["$set"]})
+            self._save(docs)
 
     def delete_one(self, query):
-        self._check_reload()
-        for i, doc in enumerate(self.docs):
-            if self._matches(doc, query):
-                self.docs.pop(i)
-                self._save()
-                class Result:
-                    deleted_count = 1
-                return Result()
-        class Result:
-            deleted_count = 0
-        return Result()
+        with _lock:
+            docs = self._docs()
+            match = next((d for d in docs if _matches(d, query)), None)
+            if match:
+                docs.remove(match)
+                self._save(docs)
+            return SimpleNamespace(deleted_count=int(match is not None))
 
-    def count_documents(self, query=None):
-        self._check_reload()
-        return len(self.find(query))
 
-class LocalDatabase:
-    """Mock/local database."""
-    def __init__(self, storage_file: Path):
-        self.storage_file = storage_file
+def local_collections(path=DB_FILE):
+    return (LocalCollection("employees", path, [("employee_id",)]),
+            LocalCollection("attendance", path, [("employee_id", "date")]))
 
-    def __getitem__(self, name: str):
-        return LocalCollection(name, self.storage_file)
 
-class LocalClient:
-    """Mock/local MongoClient."""
-    def __init__(self, uri="local"):
-        self.uri = uri
-        self.storage_file = Path("attendance_db.json")
-
-    def __getitem__(self, db_name: str):
-        return LocalDatabase(self.storage_file)
-
-    def close(self):
-        pass
-
-def load_env():
-    """Load variables from .env file if available."""
-    env_path = Path(".env")
-    if env_path.exists():
-        with open(env_path, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith("#") and "=" in line:
-                    k, v = line.split("=", 1)
-                    os.environ.setdefault(k.strip(), v.strip())
-
-def connect_and_setup():
-    """
-    Connect to MongoDB if available and running; otherwise fall back to persistent local storage.
-    Returns: (client, db, employees_collection, attendance_collection)
-    """
-    load_env()
-    mongo_uri = os.environ.get("MONGODB_URI", "mongodb://localhost:27017/")
-    client = None
-    db = None
-
+def connect():
+    """Return (employees, attendance) collections: MongoDB if reachable, else attendance_db.json."""
+    env = HERE / ".env"
+    if env.exists():
+        for line in env.read_text().splitlines():
+            if "=" in line and not line.startswith("#"):
+                key, value = line.split("=", 1)
+                os.environ.setdefault(key.strip(), value.strip())
+    uri = os.environ.get("MONGODB_URI", "mongodb://localhost:27017/")
     try:
         import pymongo
-        # Short timeout to quickly detect if local MongoDB is up
-        client = pymongo.MongoClient(mongo_uri, serverSelectionTimeoutMS=1000)
-        client.admin.command('ping')
+        client = pymongo.MongoClient(uri, serverSelectionTimeoutMS=1000)
+        client.admin.command("ping")
         db = client["employee_attendance_db"]
-        emp_col = db["employees"]
-        att_col = db["attendance"]
-
-        # Set up unique indexes
-        emp_col.create_index("employee_id", unique=True)
-        att_col.create_index([("employee_id", 1), ("date", 1)], unique=True)
-        print("Connected to live MongoDB successfully!")
-        return client, db, emp_col, att_col
-    except Exception as e:
-        print("Notice: Live MongoDB instance not found on localhost:27017.")
-        print("Switching to persistent Local Database storage ('attendance_db.json').")
-        local_client = LocalClient("attendance_db.json")
-        db = local_client["employee_attendance_db"]
-        emp_col = LocalCollection("employees", local_client.storage_file)
-        att_col = LocalCollection("attendance", local_client.storage_file)
-
-        emp_col.create_index("employee_id", unique=True)
-        att_col.create_index([("employee_id", 1), ("date", 1)], unique=True)
-        return local_client, db, emp_col, att_col
-
+        db.employees.create_index("employee_id", unique=True)
+        db.attendance.create_index([("employee_id", 1), ("date", 1)], unique=True)
+        print("Using MongoDB at", uri)
+        return db.employees, db.attendance
+    except Exception:  # pymongo missing or server down
+        print(f"MongoDB not reachable, using {DB_FILE.name}")
+        return local_collections()
