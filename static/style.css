@@ -188,8 +188,17 @@ textarea.input { height: auto; padding: 10px 12px; resize: vertical; }
 
 .grid-ov {
   display: grid; gap: 16px; grid-template-columns: repeat(4, minmax(0, 1fr));
-  grid-template-areas: "k1 k2 k3 k4" "week week reg dept" "live live gauge db";
+  /* bento: KPI tiles sit 2x2 beside the week chart; wide cards pair with tall ones */
+  grid-template-areas: "k1 k2 week week" "k3 k4 week week" "reg live live db" "dept dept gauge gauge";
 }
+.grid-ov > .card { min-width: 0; }
+.grid-ov .depts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-auto-flow: column; grid-template-rows: repeat(4, auto); column-gap: 32px; align-content: start; }
+.grid-ov .depts li:nth-child(5) { border-top: 0; padding-top: 0; }
+.gauge-card { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-rows: auto 1fr auto; column-gap: 24px; }
+.gauge-card .card-h { grid-column: 1 / -1; }
+.gauge-card .gauge { grid-row: 2 / 4; align-self: center; }
+.gauge-card .legend { flex-direction: column; align-items: flex-start; justify-content: center; margin: 0; gap: 12px; font-size: 13px; }
+.gauge-card .prev { grid-column: 2; text-align: left !important; margin-top: 12px !important; }
 .kpi { position: relative; display: flex; flex-direction: column; gap: 8px; min-height: 168px; }
 .kpi h2 { font-size: 15px; font-weight: 600; }
 .kpi .big { font-size: 52px; font-weight: 600; letter-spacing: -.04em; line-height: 1; margin-top: auto; }
@@ -203,17 +212,20 @@ textarea.input { height: auto; padding: 10px 12px; resize: vertical; }
 
 /* week capsule chart */
 .wk { display: flex; flex-direction: column; }
-.capsules { flex: 1; min-height: 228px; position: relative; display: grid; grid-template-columns: 32px repeat(7, minmax(0, 1fr)); gap: 0 8px; }
+.capsules { flex: 1; min-height: 160px; position: relative; display: grid; grid-template-columns: 32px repeat(7, minmax(0, 1fr)); gap: 0 8px; }
 .capsules .yax { position: relative; font-size: 11px; color: var(--muted); }
 .capsules .yax span { position: absolute; right: 0; transform: translateY(-50%); }
 .capsules .grid { position: absolute; left: 40px; right: 0; top: 0; height: calc(100% - 28px); pointer-events: none; }
 .capsules .grid i { position: absolute; left: 0; right: 0; height: 1px; background: var(--line-2); }
 .cap { display: flex; flex-direction: column; align-items: center; gap: 8px; min-width: 0; height: 100%; border: 0; background: none; padding: 0; cursor: default; }
-.cap .track { position: relative; width: min(100%, 56px); flex: 1; border-radius: 999px; background: var(--g-50); overflow: hidden; }
+.cap .track { position: relative; width: min(100%, 64px); flex: 1; border-radius: 999px; background: var(--g-50); overflow: hidden; }
 .cap .fill { position: absolute; left: 0; right: 0; bottom: 0; border-radius: 999px; background: var(--g-500); transition: height 400ms var(--ease); }
 .cap.today .fill { background: var(--g-800); }
 :root[data-theme="dark"] .cap.today .fill { background: var(--g-300); }
 .cap.off .track { background: var(--hatch); border: 1px solid var(--line); }
+.wk-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--line-2); }
+.wk-stats small { display: block; font-size: 12px; color: var(--muted); }
+.wk-stats b { font-size: 18px; font-weight: 600; }
 .cap .lbl { font-size: 12px; color: var(--muted); font-weight: 500; }
 .cap.today .lbl { color: var(--ink); font-weight: 700; }
 .cap .val { position: absolute; left: 50%; transform: translateX(-50%); font-size: 11px; font-weight: 700; padding: 2px 6px; border-radius: 6px; background: var(--card); border: 1px solid var(--line); white-space: nowrap; color: var(--ink); }
@@ -440,7 +452,7 @@ dialog::backdrop { background: rgb(10 22 16 / .42); }
 
 /* ---------- responsive ---------- */
 @media (max-width: 1279px) {
-  .grid-ov { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-areas: "k1 k2" "k3 k4" "week week" "reg dept" "live live" "gauge db"; }
+  .grid-ov { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-areas: "k1 k2" "k3 k4" "week week" "reg db" "live live" "dept dept" "gauge gauge"; }
   .role-text { display: none; }
 }
 @media (max-width: 899px) {
@@ -463,6 +475,8 @@ dialog::backdrop { background: rgb(10 22 16 / .42); }
   .search-trigger { flex: 1; } .search-trigger kbd, .today-label { display: none; }
   .role-chip { padding-left: 8px; } .sync { font-size: 0; gap: 0; }
   .grid-ov { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; grid-template-areas: "k1 k2" "k3 k4" "week week" "reg reg" "dept dept" "live live" "gauge gauge" "db db"; }
+  .grid-ov .depts { grid-template-columns: minmax(0, 1fr); grid-auto-flow: row; grid-template-rows: none; } .grid-ov .depts li:nth-child(5) { border-top: 1px solid var(--line-2); padding-top: 10px; } .gauge-card { display: block; }
+  .gauge-card .legend { flex-direction: row; justify-content: center; margin-top: 16px; } .gauge-card .prev { text-align: center !important; }
   .card { padding: 16px; border-radius: 18px; }
   .kpi { min-height: 140px; } .kpi .big { font-size: 38px; } .kpi h2 { font-size: 13px; padding-right: 32px; }
   .kpi .go { width: 32px; height: 32px; top: 12px; right: 12px; }

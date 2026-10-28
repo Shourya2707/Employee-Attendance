@@ -202,15 +202,23 @@ function weekCard() {
       <div class="actions"><button class="icon-btn sm" data-act="week" data-d="-1" aria-label="Previous week">${icon('left', 16)}</button>
       <button class="icon-btn sm" data-act="week" data-d="1" aria-label="Next week" ${S.weekOff >= 0 ? new Raw('disabled') : ''}>${icon('right', 16)}</button></div></div>
     <div class="capsules"><div class="yax">${[100, 50, 0].map(v => html`<span style="top:calc((100% - 28px) * ${(100 - v) / 100})">${v}%</span>`)}</div>
-      <div class="grid">${[0, 50, 100].map(v => html`<i style="top:${v}%"></i>`)}</div>${bars}</div></section>`;
+      <div class="grid">${[0, 50, 100].map(v => html`<i style="top:${v}%"></i>`)}</div>${bars}</div>
+    ${weekStats(days)}</section>`;
+}
+function weekStats(days) {
+  const ds = days.filter(d => isWork(d) && d <= S.today && byDate.has(d));
+  if (!ds.length) return '';
+  const all = tally(ds.flatMap(d => byDate.get(d))), best = ds.reduce((a, d) => (tally(byDate.get(d)).rate > tally(byDate.get(a)).rate ? d : a));
+  const stat = (label, v) => html`<div><small>${label}</small><b class="num">${v}</b></div>`;
+  return html`<div class="wk-stats">${stat('Week average', pct(all.rate))}${stat('Best day', fmt(best, { weekday: 'long' }))}${stat('Late arrivals', all.Late)}</div>`;
 }
 
 function registerCard(unmarked, recs, head, work) {
   let body;
   if (!work) body = html`<p class="headline">No register today</p><p class="muted" style="margin-top:8px">${fmt(S.today, { weekday: 'long' })} isn't a working day. The next register opens Monday.</p>`;
   else if (unmarked.length) body = html`<p class="headline">${plural(unmarked.length, 'employee')} not marked yet</p>
-    <ul class="rows" style="margin:16px 0">${unmarked.slice(0, 4).map(e => html`<li>${avatar(e.employee_id, e.name)}<div class="who"><b>${e.name}</b><small>${e.department}</small></div></li>`)}</ul>
-    ${unmarked.length > 4 ? html`<p class="muted" style="margin:-8px 0 16px">and ${unmarked.length - 4} more</p>` : ''}
+    <ul class="rows" style="margin:16px 0">${unmarked.slice(0, 3).map(e => html`<li>${avatar(e.employee_id, e.name)}<div class="who"><b>${e.name}</b><small>${e.department}</small></div></li>`)}</ul>
+    ${unmarked.length > 3 ? html`<p class="muted" style="margin:-8px 0 16px">and ${unmarked.length - 3} more</p>` : ''}
     <button class="btn primary" data-act="allPresent" data-date="${S.today}">${icon('check', 18)} Mark all present</button>`;
   else {
     const last = recs.map(r => r.marked_at || '').sort().pop();
@@ -247,13 +255,13 @@ function gaugeCard() {
   const segs = [['On time', t.Present, 'var(--present)'], ['Late', t.Late, 'var(--late)'], ['Half-day', t['Half-Day'], 'var(--half)'], ['Leave / absent', t['On Leave'] + t.Absent, 'url(#hatch)']];
   let at = 0;
   const arcs = t.n ? segs.map(([, n, c]) => { const len = n / t.n * 100, a = at; at += len; return len > 0.5 ? html`<path d="M20 120 A100 100 0 0 1 220 120" pathLength="100" stroke-dasharray="${Math.max(len - 1, .3)} 200" stroke-dashoffset="${-a}" style="stroke:${c}"/>` : ''; }) : '';
-  return html`<section class="card" style="grid-area:gauge"><div class="card-h"><div><h2>Month to date</h2><span class="sub">${fmt(S.today, { month: 'long' })} · ${plural(t.n, 'person-day')}</span></div></div>
+  return html`<section class="card gauge-card" style="grid-area:gauge"><div class="card-h"><div><h2>Month to date</h2><span class="sub">${fmt(S.today, { month: 'long' })} · ${plural(t.n, 'person-day')}</span></div></div>
     <div class="gauge"><svg viewBox="0 0 240 132" role="img" aria-label="${segs.map(s => `${s[0]} ${s[1]}`).join(', ')}">
       <defs><pattern id="hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="6" height="6" style="fill:var(--leave-bg)"/><rect width="2.4" height="6" style="fill:var(--leave)"/></pattern></defs>
       <g fill="none" stroke-width="30"><path d="M20 120 A100 100 0 0 1 220 120" style="stroke:var(--line-2)"/>${arcs}</g></svg>
       <div class="center"><b>${pct(t.onTime)}</b><small>on time</small></div></div>
     <div class="legend">${segs.map(([l, n, c]) => html`<span><i class="sw" style="background:${c === 'url(#hatch)' ? 'var(--hatch-leave)' : c}"></i>${l} <b class="num">${n}</b></span>`)}</div>
-    ${pt.n ? html`<p class="muted" style="text-align:center;margin-top:16px;font-size:12px">${fmt(pm, { month: 'long' })}: ${pct(pt.onTime)} on time over ${plural(pt.n, 'person-day')}</p>` : ''}</section>`;
+    ${pt.n ? html`<p class="muted prev" style="text-align:center;margin-top:16px;font-size:12px">${fmt(pm, { month: 'long' })}: ${pct(pt.onTime)} on time over ${plural(pt.n, 'person-day')}</p>` : ''}</section>`;
 }
 
 // The NoSQL side of the app: what is stored, how it is indexed, and the last document written.
